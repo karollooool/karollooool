@@ -2,7 +2,7 @@
 
 ---
 
-## 🔗 💬 About me
+##  💬 About me
 
 - 🐒 20 years old  
 - 📚 Studying CS at THI  
@@ -14,9 +14,9 @@
 
 <p>
  
-  <img src="icons/C.svg" width="44" height="44" alt="C" style="margin-right:30px" />
-  <img src="icons/C++.svg"    width="44" height="44" alt="C++" style="margin-right:30px" />
-  <img src="icons/Java.svg"  width="44" height="44" alt="Java" style="margin-right:30px" />
+  <img src="icons/C.svg" width="44" height="44" alt="C" style="margin-right:100px" />
+  <img src="icons/C++.svg"    width="44" height="44" alt="C++" style="margin-right:100px" />
+  <img src="icons/Java.svg"  width="44" height="44" alt="Java" style="margin-right:100px" />
 </p>
 
 Tip: edit the numeric width/height attributes to resize the icons at once (e.g., 32 or 48).
