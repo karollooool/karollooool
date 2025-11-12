@@ -17,5 +17,5 @@
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
   <img src="icons/C++.svg" width="44" height="44" alt="C++" />
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="icons/Java.svg" width="44" height="44" alt="Java" />
+  <img src="icons/Java.svg" width="50" height="50" alt="Java" />
 </p>
