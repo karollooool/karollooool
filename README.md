@@ -31,7 +31,7 @@ Instructions:
   <img src="https://raw.githubusercontent.com/karollooool/REPO/main/icons/java.svg" width="44" height="44" alt="Java" style="margin-right:12px" />
   <img src="https://raw.githubusercontent.com/karollooool/REPO/main/icons/cpp.svg" width="44" height="44" alt="C++" style="margin-right:12px" />
   <img src="https://raw.githubusercontent.com/karollooool/REPO/main/icons/python.svg" width="44" height="44" alt="Python" style="margin-right:12px" />
-  <!-- add more icons as needed -->
+
 </p>
 
 <p class="muted">Tip: change the numeric width/height in the &lt;img&gt; tags to resize all icons. Use the same value for both to preserve aspect ratio.</p>
