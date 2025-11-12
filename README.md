@@ -26,7 +26,7 @@ Instructions:
 <p>
   <!-- Replace REPO and filenames below with your repo name and icon file names -->
   <!-- Change width/height to scale the icons (e.g. 32, 40, 44). -->
-  <img src="xmlns="http://www.w3.org/2000/svg" width="44" height="44" alt="C#" style="margin-right:12px" />
+   <svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" width="44" height="44" alt="C#" style="margin-right:12px" />
   <img src="https://raw.githubusercontent.com/karollooool/REPO/main/icons/lua.svg" width="44" height="44" alt="Lua" style="margin-right:12px" />
   <img src="https://raw.githubusercontent.com/karollooool/REPO/main/icons/java.svg" width="44" height="44" alt="Java" style="margin-right:12px" />
   <img src="https://raw.githubusercontent.com/karollooool/REPO/main/icons/cpp.svg" width="44" height="44" alt="C++" style="margin-right:12px" />
