@@ -10,7 +10,7 @@
 
 ---
 
-## 👨‍💻 I code with
+## 👨‍💻 Languages I use
 
 <p>
   <img src="icons/C.svg" width="44" height="44" alt="C" />
