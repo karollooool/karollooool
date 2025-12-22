@@ -6,7 +6,7 @@
 
 - 🐒 20 years old  
 - 📚 Studying CS at THI  
-- 📋 Skidding pro
+- 📋 Pasting pro
 
 ---
 
