@@ -18,6 +18,4 @@
   <img src="icons/C++.svg" width="48" height="48" alt="C++" />
   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
   <img src="icons/Java.svg" width="49" height="49" alt="Java" />
-  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;
-  <img src="icons/Python.svg" width="49" height="49" alt="Python" />
 </p>
