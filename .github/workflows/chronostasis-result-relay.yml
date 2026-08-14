@@ -1,0 +1,173 @@
+name: Chronostasis result relay
+
+on:
+  push:
+    branches:
+      - ctf-chronostasis-live-20260814
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  relay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Wait for dynamic solver artifacts and extract flag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SOURCE_BRANCH: ctf-chronostasis-live-20260814
+          RESULT_BRANCH: ctf-chronostasis-result-20260814
+        run: |
+          set -uo pipefail
+          rm -rf evidence relay-work
+          mkdir -p evidence relay-work
+          found=""
+          selected_run=""
+          last_status=""
+
+          for attempt in $(seq 1 150); do
+            runs_json=$(curl -fsSL \
+              -H "Authorization: Bearer ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${REPO}/actions/workflows/chronostasis-live-dynamic.yml/runs?branch=${SOURCE_BRANCH}&per_page=20" 2>/dev/null || true)
+
+            if [ -n "${runs_json}" ]; then
+              printf '%s' "${runs_json}" > relay-work/runs.json
+              mapfile -t completed_runs < <(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              d=json.loads(Path('relay-work/runs.json').read_text())
+          except Exception:
+              d={}
+          for r in d.get('workflow_runs',[]):
+              if r.get('status') == 'completed':
+                  print(r.get('id'))
+          PY
+              )
+
+              for run_id in "${completed_runs[@]}"; do
+                [ -n "${run_id}" ] || continue
+                artifacts_json=$(curl -fsSL \
+                  -H "Authorization: Bearer ${GH_TOKEN}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${REPO}/actions/runs/${run_id}/artifacts?per_page=100" 2>/dev/null || true)
+                [ -n "${artifacts_json}" ] || continue
+                printf '%s' "${artifacts_json}" > relay-work/artifacts.json
+                mapfile -t artifact_ids < <(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              d=json.loads(Path('relay-work/artifacts.json').read_text())
+          except Exception:
+              d={}
+          for a in d.get('artifacts',[]):
+              if not a.get('expired'):
+                  print(a.get('id'))
+          PY
+                )
+
+                for artifact_id in "${artifact_ids[@]}"; do
+                  [ -n "${artifact_id}" ] || continue
+                  zip="relay-work/${run_id}-${artifact_id}.zip"
+                  dir="evidence/${run_id}-${artifact_id}"
+                  if curl -fsSL \
+                    -H "Authorization: Bearer ${GH_TOKEN}" \
+                    -H "Accept: application/vnd.github+json" \
+                    "https://api.github.com/repos/${REPO}/actions/artifacts/${artifact_id}/zip" \
+                    -o "${zip}"; then
+                    mkdir -p "${dir}"
+                    unzip -oq "${zip}" -d "${dir}" || true
+                  fi
+                done
+              done
+            fi
+
+            found=$(python3 - <<'PY'
+          import re
+          from pathlib import Path
+          flags=[]
+          for p in Path('evidence').rglob('*'):
+              if not p.is_file() or p.stat().st_size > 20_000_000:
+                  continue
+              try:
+                  s=p.read_text(errors='replace')
+              except Exception:
+                  continue
+              flags += re.findall(r'rewrite\{[^}\r\n]{1,500}\}', s)
+          seen=[]
+          for x in flags:
+              if x not in seen:
+                  seen.append(x)
+          print(seen[0] if seen else '')
+          PY
+            )
+            if [ -n "${found}" ]; then
+              printf '%s\n' "${found}" > relay-work/flag.txt
+              break
+            fi
+
+            last_status=$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          try:
+              d=json.loads(Path('relay-work/runs.json').read_text())
+              rs=d.get('workflow_runs',[])
+              if rs:
+                  r=rs[0]
+                  print(f"run={r.get('id')} status={r.get('status')} conclusion={r.get('conclusion')} attempt={r.get('run_attempt')}")
+              else:
+                  print('no dynamic runs found')
+          except Exception as e:
+              print(f'run status unavailable: {e}')
+          PY
+            )
+            echo "relay attempt ${attempt}/150: ${last_status}"
+            sleep 10
+          done
+
+          if [ -z "${found}" ]; then
+            {
+              echo "NO_FLAG_FOUND"
+              echo "${last_status}"
+              date -u +'%Y-%m-%dT%H:%M:%SZ'
+              find evidence -maxdepth 3 -type f -printf '%p %s bytes\n' | tail -200
+            } > relay-work/status.txt
+          else
+            {
+              echo "FLAG_FOUND"
+              echo "${found}"
+              date -u +'%Y-%m-%dT%H:%M:%SZ'
+            } > relay-work/status.txt
+          fi
+
+          git clone --depth 1 --branch "${RESULT_BRANCH}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" result-repo
+          mkdir -p result-repo/ctf-result
+          cp relay-work/status.txt result-repo/ctf-result/status.txt
+          if [ -f relay-work/flag.txt ]; then
+            cp relay-work/flag.txt result-repo/ctf-result/flag.txt
+          fi
+          cd result-repo
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add ctf-result
+          if ! git diff --cached --quiet; then
+            git commit -m "[ctf-result] relay live solver result"
+            git push origin HEAD:"${RESULT_BRANCH}"
+          fi
+
+      - name: Upload relay evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chronostasis-result-relay-${{ github.run_id }}
+          path: |
+            relay-work
+            evidence
+          if-no-files-found: warn
